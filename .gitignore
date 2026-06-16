@@ -1,0 +1,18 @@
+# build / runtime artifacts (never committed)
+CTranslate2/
+venv/
+dist/
+*.whl
+sample.wav
+validation_results.json
+cuda-env.sh
+__pycache__/
+*.pyc
+*.log
+
+install.log
+build.log
+install.done
+install.failed
+build.done
+build.failed

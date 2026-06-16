@@ -1,0 +1,108 @@
+# =============================================================================
+# build-wheels.yml -- CI build of the FROZEN sm_50 CTranslate2 wheel
+# =============================================================================
+#
+# WHAT THIS CI DOES (and what it deliberately does NOT do):
+#
+#   * This workflow ONLY COMPILES the sm_50 (Maxwell GM107/GM108) CTranslate2
+#     wheel via docker/Dockerfile. nvcc cross-compiles sm_50 SASS on a standard
+#     ubuntu-latest runner -- NO GPU is present and NO sm_50 kernel is ever
+#     executed here. A GitHub-hosted runner cannot run Maxwell code.
+#
+#   * Functional validation is therefore IMPOSSIBLE in CI and MUST be done
+#     MANUALLY on a real Maxwell card (Quadro K2200, compute cap 5.0) by running
+#     scripts/03_validate.py on the build host. CI passing means "it compiled",
+#     not "it works on the GPU".
+#
+#   * The produced wheel is FROZEN by design (see BUILD_SPEC.md):
+#       - CUDA Toolkit 12.9  (last nvcc that emits sm_50 SASS)
+#       - cuDNN 9.10.x       (9.11 drops Maxwell)
+#       - CTranslate2 v4.8.0 + patches/1766-sm50.patch
+#       - Linux x86_64, single CUDA arch 5.0 only.
+#     It will not be updated past this toolchain ceiling.
+# =============================================================================
+
+name: build-wheels
+
+on:
+  # Manual trigger from the Actions tab.
+  workflow_dispatch:
+  # Build + publish a release whenever a version tag is pushed.
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-wheel:
+    name: Cross-compile sm_50 CTranslate2 wheel
+    runs-on: ubuntu-latest
+    # The Docker image installs the CUDA 12.9 toolchain and compiles CTranslate2
+    # from source for sm_50; this is a large image and a long build, so allow a
+    # generous ceiling.
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the image that produces the sm_50 wheel under /wheels.
+      # --load makes the resulting image available to the local docker daemon so
+      # the next step can extract files from it.
+      - name: Build sm_50 wheel image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: ct2-sm50:latest
+          load: true
+
+      # Extract the built wheel(s) from the image. Simplest robust method:
+      # create (but do not start) a container from the image, then `docker cp`
+      # the /wheels directory out of it onto the runner filesystem.
+      - name: Extract wheels from image
+        run: |
+          set -euo pipefail
+          mkdir -p wheels
+          cid="$(docker create ct2-sm50:latest)"
+          # Copy the contents of /wheels out of the container.
+          docker cp "${cid}:/wheels/." ./wheels/
+          docker rm "${cid}"
+          echo "Extracted wheels:"
+          ls -l ./wheels
+
+      - name: Upload wheels artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct2-sm50-wheels
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  release:
+    name: Attach wheels to GitHub Release
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    # Only publish a release when this run was triggered by a version tag push.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ct2-sm50-wheels
+          path: wheels
+
+      - name: Publish release with wheels
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wheels/*.whl
+          body: |
+            FROZEN sm_50 (Maxwell) CTranslate2 wheel.
+
+            Cross-compiled in CI (no GPU). Functional validation must be done
+            manually on a real Maxwell card (Quadro K2200) via scripts/03_validate.py.
+
+            Frozen pins: CUDA 12.9 + cuDNN 9.10, CTranslate2 v4.8.0 + 1766-sm50.patch,
+            Linux x86_64, sm_50 only. See BUILD_SPEC.md.

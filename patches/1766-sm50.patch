@@ -1,0 +1,35 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 52610ac89..76d84fa0a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -478,6 +478,8 @@ if (WITH_CUDA)
+     # Keep deprecated but not yet dropped Compute Capabilities.
+     if(CUDA_VERSION_MAJOR EQUAL 11)
+       list(INSERT CUDA_ARCH_LIST 0 "3.5" "5.0")
++    elseif(CUDA_VERSION_MAJOR EQUAL 12)
++      list(INSERT CUDA_ARCH_LIST 0 "5.0")
+     endif()
+     list(REMOVE_DUPLICATES CUDA_ARCH_LIST)
+   endif()
+diff --git a/src/ops/awq/dequantize_gpu.cu b/src/ops/awq/dequantize_gpu.cu
+index f63361035..baf62af36 100644
+--- a/src/ops/awq/dequantize_gpu.cu
++++ b/src/ops/awq/dequantize_gpu.cu
+@@ -13,6 +13,9 @@ namespace ctranslate2 {
+                                                               int in_c,
+                                                               int out_c)
+      {
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 530
++       assert(false);
++#else
+        if (blockIdx.z > 0) {
+          B = B + blockIdx.z * in_c * out_c / 8;
+          scaling_factors = scaling_factors + blockIdx.z * in_c * out_c / G;
+@@ -60,6 +63,7 @@ namespace ctranslate2 {
+        for (int i=0; i<8; ++i) {
+          *(C_ptr2 + i) = B_shared[i];
+        }
++#endif
+      }
+
+      template <Device D, typename InT, typename OutT>
