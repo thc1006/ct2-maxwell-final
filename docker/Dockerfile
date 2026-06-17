@@ -124,14 +124,15 @@ RUN set -eux; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
-# --- Python build toolchain --------------------------------------------------
-# ubuntu24.04 pip is PEP 668 externally-managed; --break-system-packages is the
-# intended escape hatch inside a throwaway build container. Do NOT --upgrade pip
-# itself: the debian-shipped pip has no RECORD file, so pip cannot uninstall it
-# ("Cannot uninstall pip 24.0, RECORD file not found"). The distro pip 24.0
-# builds wheels fine; we only need recent build/wheel/auditwheel.
-RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
-      build wheel auditwheel
+# --- Python build toolchain (isolated venv) ----------------------------------
+# Ubuntu 24.04 ships pip/wheel/setuptools as debian packages with NO RECORD file,
+# so a system `pip install --upgrade` cannot uninstall them and fails
+# ("Cannot uninstall wheel 0.42.0, RECORD file not found"). A venv sidesteps the
+# whole class: it has its own pip with clean RECORDs, and because we prepend it
+# to PATH, every later python/pip step (incl. install_requirements.txt) uses it.
+RUN python3 -m venv /opt/buildenv
+ENV PATH=/opt/buildenv/bin:${PATH}
+RUN pip install --no-cache-dir --upgrade pip build wheel auditwheel
 
 # --- Clone CTranslate2 v4.8.0 (with submodules) ------------------------------
 WORKDIR /src
