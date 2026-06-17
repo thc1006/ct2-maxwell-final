@@ -68,7 +68,7 @@ ARG PYTHON_VERSION=3.12
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CUDA_HOME=/usr/local/cuda \
-    PATH=/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin \
+    PATH=/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
     LD_LIBRARY_PATH=/usr/local/cuda/lib64
 
 # --- Base build deps (mirror 01_install_toolchain.sh) ------------------------
