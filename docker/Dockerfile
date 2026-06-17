@@ -126,9 +126,12 @@ RUN set -eux; \
 
 # --- Python build toolchain --------------------------------------------------
 # ubuntu24.04 pip is PEP 668 externally-managed; --break-system-packages is the
-# intended escape hatch inside a throwaway build container.
+# intended escape hatch inside a throwaway build container. Do NOT --upgrade pip
+# itself: the debian-shipped pip has no RECORD file, so pip cannot uninstall it
+# ("Cannot uninstall pip 24.0, RECORD file not found"). The distro pip 24.0
+# builds wheels fine; we only need recent build/wheel/auditwheel.
 RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
-      pip build wheel auditwheel
+      build wheel auditwheel
 
 # --- Clone CTranslate2 v4.8.0 (with submodules) ------------------------------
 WORKDIR /src
