@@ -166,21 +166,29 @@ measure latency; only the 66 s rows support a throughput claim. CPU threads were
 Reproduce on your own card with `bench/run_bench.py` (and the 5-way compute-type sanity check
 in `scripts/03_validate.py`) before deciding the GPU is worth it for your workload.
 
-## Prebuilt wheels
+## Prebuilt wheel
 
-There is **no prebuilt wheel yet** — build from source with the scripts above. When a tagged
-release (`v*`) is pushed, the CI workflow ([`.github/workflows/build-wheels.yml`](.github/workflows/build-wheels.yml))
-cross-compiles an sm_50 wheel and attaches it to the matching **GitHub Release**. Any such wheel:
+The latest release ships a prebuilt wheel, built by CI ([`build-wheels.yml`](.github/workflows/build-wheels.yml)):
 
-- contains **only sm_50 SASS** (no other architectures), and
-- targets **CUDA 12.9 + cuDNN 9.10** on **Linux x86_64**.
+- **[v0.1.0](https://github.com/thc1006/ct2-maxwell-final/releases/tag/v0.1.0)** — `ctranslate2-4.8.0-cp312-cp312-manylinux_2_39_x86_64.whl`
 
-It will not run anywhere else. On a non-Maxwell card, a different CUDA/cuDNN, or a different
-platform, build from source instead. Once a release wheel exists, on a Maxwell sm_50 host with
-the frozen toolchain installed (step 1 above) you can `pip install` it rather than running the
-full build. Note: the wheel bundles `libctranslate2.so` only if `auditwheel repair` succeeded;
-if CI fell back to the raw wheel, the host also needs `libctranslate2.so` on the loader path
-(i.e. you also ran step 2's `cmake --install`).
+It is a self-contained `manylinux` wheel (auditwheel-repaired, bundles `libctranslate2.so`), for:
+
+- **sm_50 SASS only** (Maxwell GM107/GM108; no other architectures),
+- **Python 3.12**, **Linux x86_64**, glibc >= 2.39 (Ubuntu 24.04+),
+- runtime **CUDA 12.9 + cuDNN 9.10** (driver >= 575; the Maxwell R580 branch satisfies this).
+
+Install it on a Maxwell host with that runtime. Install faster-whisper first, then force the
+sm_50 wheel last so it wins over the PyPI build that has no Maxwell kernels:
+
+```bash
+pip install faster-whisper
+pip install --force-reinstall --no-deps \
+  https://github.com/thc1006/ct2-maxwell-final/releases/download/v0.1.0/ctranslate2-4.8.0-cp312-cp312-manylinux_2_39_x86_64.whl
+```
+
+For any other Python version, glibc, CUDA/cuDNN, or platform, build from source with the
+scripts above. Each new `v*` tag rebuilds and attaches a fresh wheel.
 
 ## Credit
 
