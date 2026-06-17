@@ -42,16 +42,16 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Build the image that produces the sm_50 wheel under /wheels.
       # --load makes the resulting image available to the local docker daemon so
       # the next step can extract files from it.
       - name: Build sm_50 wheel image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -76,7 +76,7 @@ jobs:
           ls -l ./wheels
 
       - name: Upload wheels artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ct2-sm50-wheels
           path: wheels/*.whl
@@ -92,13 +92,13 @@ jobs:
       contents: write
     steps:
       - name: Download wheels artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ct2-sm50-wheels
           path: wheels
 
       - name: Publish release with wheels
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: wheels/*.whl
           body: |
