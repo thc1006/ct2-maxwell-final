@@ -65,7 +65,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p wheels
-          cid="$(docker create ct2-sm50:latest)"
+          # The export stage is FROM scratch and carries no CMD, so `docker create`
+          # needs a placeholder command (never executed -- we only docker cp out of
+          # the created container, which does not require a runnable command).
+          cid="$(docker create ct2-sm50:latest sh)"
           # Copy the contents of /wheels out of the container.
           docker cp "${cid}:/wheels/." ./wheels/
           docker rm "${cid}"
