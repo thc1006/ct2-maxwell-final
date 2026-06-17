@@ -108,16 +108,19 @@ RUN set -eux; \
       exit 1; \
     fi; \
     CUDNN_VER="$(apt-cache madison libcudnn9-cuda-12 | awk '{print $3}' | grep -E "^${CUDNN_MAJOR_MINOR}\\." | sort -V | tail -1 || true)"; \
-    if [ -z "${CUDNN_VER}" ]; then \
+    CUDNN_HDR_VER="$(apt-cache madison libcudnn9-headers-cuda-12 | awk '{print $3}' | grep -E "^${CUDNN_MAJOR_MINOR}\\." | sort -V | tail -1 || true)"; \
+    CUDNN_DEV_VER="$(apt-cache madison libcudnn9-dev-cuda-12 | awk '{print $3}' | grep -E "^${CUDNN_MAJOR_MINOR}\\." | sort -V | tail -1 || true)"; \
+    if [ -z "${CUDNN_VER}" ] || [ -z "${CUDNN_HDR_VER}" ] || [ -z "${CUDNN_DEV_VER}" ]; then \
       echo "FATAL: no cuDNN ${CUDNN_MAJOR_MINOR}.x available in apt (only 9.11+? that DROPS Maxwell)." >&2; \
       echo "       FALLBACK: rebuild with cuDNN 8 + CTranslate2 4.4.0 per BUILD_SPEC.md. Do not accept 9.11." >&2; \
       exit 1; \
     fi; \
-    echo "Installing cuDNN pinned: ${CUDNN_VER}"; \
+    echo "Installing cuDNN pinned: rt=${CUDNN_VER} hdr=${CUDNN_HDR_VER} dev=${CUDNN_DEV_VER}"; \
     apt-get install -y --no-install-recommends --allow-downgrades \
       "libcudnn9-cuda-12=${CUDNN_VER}" \
-      "libcudnn9-dev-cuda-12=${CUDNN_VER}"; \
-    apt-mark hold libcudnn9-cuda-12 libcudnn9-dev-cuda-12; \
+      "libcudnn9-headers-cuda-12=${CUDNN_HDR_VER}" \
+      "libcudnn9-dev-cuda-12=${CUDNN_DEV_VER}"; \
+    apt-mark hold libcudnn9-cuda-12 libcudnn9-headers-cuda-12 libcudnn9-dev-cuda-12; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
