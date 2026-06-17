@@ -107,29 +107,57 @@ for s in segments:
   in 2 GB and will OOM. Do not assume a model that runs on the K2200 also runs on a 2 GB
   card.
 
-## Is the GPU even worth it on Maxwell?
+## Is the GPU worth it on Maxwell? (measured)
 
-Be honest with yourself before committing to the GPU path. sm_50 has **no native FP16** and
-**no `dp4a` int8 acceleration** (both arrived in later architectures). On Maxwell, int8 and
-fp16 fall back to slower paths, so for small Whisper models the GPU may be only marginally
-faster than — or even slower than — a decent CPU running int8. The GPU is not automatically
-the right choice here.
+sm_50 has **no native FP16** and **no `dp4a` int8** acceleration, so on this GPU CTranslate2
+reports `float32` as the only supported CUDA compute type — `int8` / `float16` requests fall
+back to `float32`. The common intuition "an old Maxwell GPU can't beat a CPU" turns out to be
+**wrong for sustained work**: measured on a Quadro K2200, GPU `float32` transcribes **4–5x
+faster than the CPU baseline** on a 66 s clip.
 
-`scripts/03_validate.py` exists precisely to settle this: it transcribes the same clip
-across `cuda float32`, `cuda int8_float32`, `cuda int8`, `cpu int8`, and `cpu float32`,
-prints load time, transcribe time, and real-time factor (RTF), and writes
-`validation_results.json`. **Run it on your own hardware and compare** before deciding the
-GPU is worth it.
+Measured on a Quadro K2200 (sm_50, 4 GB, driver 580.159.03), Ubuntu 24.04, CTranslate2 v4.8.0
++ PR #1766, faster-whisper, `beam_size=1`, VAD off, CPU pinned to 4 threads. Each `transcribe`
+figure is the **median of 5 timed runs after one warmup**; the one-time `WhisperModel(...)`
+load (CUDA context + weights to VRAM + first cuDNN/cuBLAS setup) is reported separately as
+`load` and is **not** a per-clip cost. RTF = transcribe / audio seconds (lower is faster);
+`x_rt` = times faster than real time.
 
-Benchmark (to be filled in after validation on the Quadro K2200):
+**Throughput — 66 s clip (the number that matters for real files):**
 
-| device | compute_type   | transcribe_s | RTF  |
-|--------|----------------|--------------|------|
-| cuda   | float32        | TBD          | TBD  |
-| cuda   | int8_float32   | TBD          | TBD  |
-| cuda   | int8           | TBD          | TBD  |
-| cpu    | int8           | TBD          | TBD  |
-| cpu    | float32        | TBD          | TBD  |
+| model | config       | load  | transcribe (median) | RTF   | x_rt |
+|-------|--------------|-------|---------------------|-------|------|
+| tiny  | cuda float32 | 0.86s | 7.40s               | 0.112 | 8.9x |
+| tiny  | cpu  int8    | 0.53s | 32.92s              | 0.499 | 2.0x |
+| tiny  | cpu  float32 | 0.44s | 29.35s              | 0.445 | 2.2x |
+| small | cuda float32 | 9.88s | 27.36s              | 0.415 | 2.4x |
+| small | cpu  int8    | 0.89s | 140.51s             | 2.129 | 0.5x |
+| small | cpu  float32 | 1.15s | 113.74s             | 1.723 | 0.6x |
+
+GPU vs CPU-int8 on the 66 s clip: **tiny 4.45x, small 5.13x faster.**
+
+**Latency — single 11 s clip (fixed per-call overhead dominates):**
+
+| model | config       | load  | transcribe (median) | end-to-end (load + 1 clip) |
+|-------|--------------|-------|---------------------|----------------------------|
+| tiny  | cuda float32 | 0.86s | 0.19s               | ~1.0s                      |
+| tiny  | cpu  float32 | 0.44s | 0.82s               | ~1.3s                      |
+| small | cuda float32 | 9.88s | 1.20s               | ~11.1s                     |
+| small | cpu  int8    | 0.89s | 5.33s               | ~6.2s                      |
+
+**What this means.** For batch / long audio the GPU wins decisively (4–5x). For a *single
+one-off short clip* with a larger model, the GPU's ~10 s one-time load can make the CPU faster
+end-to-end — but that load amortizes immediately over any repeated use. Note also that **int8
+was slower than float32 on this CPU** (the old host CPU lacks modern int8 / VNNI instructions),
+so on Maxwell-era machines "use int8 on CPU" is not automatically faster — measure it. For the
+`small` model this CPU cannot keep up with real time (RTF > 1) while the GPU stays at ~0.4 RTF.
+
+**Benchmark caveat (read before trusting these numbers).** All numbers are from a single Quadro
+K2200 on one machine. The 940MX is the same sm_50 ISA but a **different, slower, 2 GB part** —
+these numbers do not transfer to it; on 2 GB stick to tiny / base / small. The short-clip rows
+measure latency; only the 66 s rows support a throughput claim. CPU threads were pinned
+(CTranslate2 4.8.0's default `intra_threads=0` can oversubscribe, upstream issue #2063).
+Reproduce on your own card with `bench/run_bench.py` (and the 5-way compute-type sanity check
+in `scripts/03_validate.py`) before deciding the GPU is worth it for your workload.
 
 ## Prebuilt wheels
 

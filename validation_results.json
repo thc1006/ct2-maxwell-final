@@ -1,0 +1,46 @@
+[
+  {
+    "device": "cuda",
+    "compute_type": "float32",
+    "ok": true,
+    "load_s": 4.04,
+    "transcribe_s": 0.59,
+    "audio_s": 11.0,
+    "rtf": 0.053,
+    "text": "And so my fellow Americans ask not what your country can do for you ask what you"
+  },
+  {
+    "device": "cuda",
+    "compute_type": "int8_float32",
+    "ok": false,
+    "error": "Requested int8_float32 compute type, but the target device or backend do not support efficient int8_float32 computation.",
+    "kind": "other"
+  },
+  {
+    "device": "cuda",
+    "compute_type": "int8",
+    "ok": false,
+    "error": "Requested int8 compute type, but the target device or backend do not support efficient int8 computation.",
+    "kind": "other"
+  },
+  {
+    "device": "cpu",
+    "compute_type": "int8",
+    "ok": true,
+    "load_s": 0.42,
+    "transcribe_s": 1.57,
+    "audio_s": 11.0,
+    "rtf": 0.142,
+    "text": "And so my fellow Americans ask not what your country can do for you ask what you"
+  },
+  {
+    "device": "cpu",
+    "compute_type": "float32",
+    "ok": true,
+    "load_s": 0.41,
+    "transcribe_s": 1.36,
+    "audio_s": 11.0,
+    "rtf": 0.123,
+    "text": "And so my fellow Americans ask not what your country can do for you ask what you"
+  }
+]

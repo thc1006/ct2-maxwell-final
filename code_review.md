@@ -452,3 +452,447 @@ All 1 HIGH and 5 MEDIUM prior findings are RESOLVED; the 2 actionable LOWs
 (idempotency, cuDNN-dev pin) are RESOLVED; the remaining LOWs were informational
 and unchanged. No regressions of MEDIUM-or-higher severity. One new cosmetic LOW.
 **REVIEW STATUS: PASS.**
+
+---
+
+## Re-review #3 (benchmark + publish-readiness)
+
+Adversarial review of `bench/run_bench.py` (NEW, not yet run), the Phase-4
+single-run validation numbers, the author's intended published conclusion, and
+the two `(cd /tmp && python -c ...)` cwd-shadow verify lines in `02_build_ct2.sh`.
+Scope: would the PUBLISHED numbers/claims be wrong or misleading under the
+author's real name. I verified the load-bearing facts upstream rather than
+asserting from memory (sources at the end of this section).
+
+RE-REVIEW #3 STATUS: PASS
+(was FAIL; the author re-ran a rigorous median-of-5 benchmark and rewrote the
+README. All 3 HIGH and 5 MEDIUM concerns are addressed in the published numbers.
+See "## Re-review #3 FINAL (numbers verified)" at the end of this file.)
+
+Counts (original): HIGH = 3, MEDIUM = 5, LOW = 4.
+(FAIL because three HIGHs are present: the published "~2.3x" and "~4s CUDA init"
+claims are derived from a single unverified run and a mislabeled cause, and the
+single-11s-clip throughput claim is not supported by the data the bench produces.)
+
+---
+
+### What I verified upstream (so this is not vibes)
+
+- **faster-whisper `transcribe()` returns a LAZY generator.** Return type is
+  `Tuple[Iterable[Segment], TranscriptionInfo]`. The actual encoder/decoder GPU
+  work runs *during iteration* of the segments generator (inside
+  `_*segments_generator` -> `self.forward()`), NOT when `transcribe()` returns.
+  `TranscriptionInfo` (incl. `.duration`) is computed eagerly before the
+  generator is yielded (VAD/feature-extract/lang-detect run up front).
+  => Consequence for the bench: `" ".join(s.text for s in segments)` **does**
+  force the full transcription, so the timed region is real work, not a no-op.
+  This part is correct in both `03` and `run_bench.py`. (Source: faster-whisper
+  `transcribe.py`, master.)
+- **CTranslate2 GPU execution is synchronous from Python's view per call.** The
+  Python `generate`/Whisper path returns materialized host-side results
+  (token ids / `Segment.text`), which forces a device->host copy and therefore a
+  stream sync before each `Segment` is yielded; consuming the generator to
+  completion blocks on all GPU compute. => The wall-clock around the `for s in
+  segments` consumption captures real GPU compute; no explicit
+  `torch.cuda.synchronize()` is needed here because faster-whisper/CT2 do not
+  expose a lazy CUDA tensor to Python. This is the one thing that, had it been
+  false, would have invalidated every GPU number; it holds.
+- **`cpu_threads` default = 0 -> CT2 `intra_threads=0`.** faster-whisper
+  `WhisperModel.__init__` defaults: `device="auto"`, `compute_type="default"`,
+  `cpu_threads=0`, `num_workers=1`; `cpu_threads` is passed straight to CT2
+  `intra_threads`. CT2 `intra_threads=0` does NOT mean "all cores": it honors
+  `OMP_NUM_THREADS` if set, else picks a small default (historically capped at
+  ~4). **CT2 4.8.0 (our frozen pin) has a known `intra_threads=0` thread bug
+  (OpenNMT/CTranslate2#2063): on some platforms it oversubscribes (~1470% CPU)
+  and runs pathologically slower than `intra_threads=1`.** This directly
+  threatens the CPU baseline's representativeness and is unreported by the bench
+  (see [HIGH-3]). (Sources: faster-whisper `transcribe.py`; CT2 docs
+  `parallel.html`/`performance.md`; CT2 issue #2063.)
+
+---
+
+### Findings
+
+#### [HIGH-1] The published "~2.3x faster" comes from a SINGLE Phase-4 run, not from the median-of-N the bench produces — the README must not publish the 0.59/1.36 single-shot pair
+
+**Where:** intended README conclusion ("0.59 vs 1.36s ... ~2.3x"); data source is
+the Phase-4 `03_validate.py` run (single transcription, no warmup, beam_size=1).
+
+**Problem.** `03_validate.py` times exactly one transcription per case with **no
+warmup**. The 0.59s GPU number therefore includes first-call effects (cuDNN
+algorithm selection / autotune, first-kernel load, lazy CUDA module load), and
+the 1.36s CPU number includes cold model-weight page-in and the CT2 thread
+ramp. A ratio of two cold single shots is not a steady-state throughput ratio,
+and "~2.3x" is stated to 2 significant figures off of n=1 with no dispersion.
+The whole reason `run_bench.py` exists (warmup + median-of-N + separated load)
+is to replace exactly these numbers — so publishing the *validation* numbers
+pre-empts and contradicts the rigorous bench.
+
+**Fix.** Publish ONLY `run_bench.py` median-of-N numbers, and report the speedup
+as `median(cpu)/median(gpu)` with the actual N and the per-run spread (min-max or
+all `runs[]`). Do not print a 2-sig-fig "2.3x" from n=1. If the bench's median
+ratio lands near 2.3x, state it as e.g. "GPU float32 ~2.0-2.5x faster than
+CPU-int8 in steady state (median of N=… runs, tiny model, 11s clip)". Raise
+`CT2_BENCH_REPEATS` to >= 5 for a publishable median (3 is the floor; with 3,
+median == the middle of 3 and is noise-sensitive).
+
+#### [HIGH-2] "~4s one-time CUDA init" is a mislabeled cause — `load_s` is WhisperModel construction (weights to GPU + context + first cuDNN/cuBLAS handle), not "CUDA init"; do not attribute it to one thing
+
+**Where:** intended README conclusion ("pays a ~4s one-time CUDA init").
+
+**Problem.** The 4.04s `load_s` from Phase-4 is the wall time of
+`WhisperModel("tiny", device="cuda", ...)` plus the **first** transcription is
+NOT inside it — but `load_s` itself bundles: (a) CUDA context / primary-context
+creation, (b) loading + casting model weights and copying them host->device,
+(c) lazy `libcudart`/`libcublas`/`libcudnn` load and first handle creation, and
+on some stacks (d) JIT/PTX work if any kernel lacks the exact SASS. Calling all
+4s "CUDA init" is a specific causal claim that the data does not isolate — most
+of a tiny-model GPU load on a 4GB Maxwell over PCIe is plausibly weight transfer
++ cuBLAS/cuDNN handle creation, not bare context init (bare `cuInit`/context is
+typically a few hundred ms). Publishing "4s CUDA init" under a real name invites
+a correct "that's not what that measures" reply.
+
+**Fix.** Describe it as measured, not as mechanism: "a one-time model-load /
+GPU-warmup cost of ~Xs (CUDA context + weights to VRAM + first cuDNN/cuBLAS
+setup), measured as `load_s`, paid once per process." Report the bench's actual
+median `load_s`, not the 4.04s single sample. If the author wants to claim it is
+*mostly* context init, that requires isolating it (e.g. time a bare
+`ctranslate2`/CUDA context create with no model) — which the bench does not do,
+so the claim should be dropped, not asserted.
+
+#### [HIGH-3] An 11s clip + unpinned/unreported CPU thread count makes the CPU baseline (and therefore the GPU-vs-CPU ratio) non-reproducible and possibly pathological on CT2 4.8.0
+
+**Where:** `bench/run_bench.py` (single `sample.wav`, `CONFIGS` cpu cases,
+no thread pinning, no `OMP_NUM_THREADS` set/reported); intended README throughput
+claim ("for sustained/batch/long audio the GPU wins on throughput").
+
+**Problem (two compounding issues).**
+1. **Per-call fixed overhead dominates an 11s clip.** At RTF ~0.05-0.14 the
+   actual compute is 0.6-1.6s, a large fraction of which is fixed per-call cost
+   (VAD, feature extraction, generator setup, a single tiny encoder pass).
+   A throughput/"GPU wins on long audio" claim **cannot be supported by an 11s
+   clip** — that is precisely the regime where fixed overhead, not steady
+   throughput, is being measured. The author's own conclusion ("for
+   sustained/batch/long audio the GPU wins on throughput") is an *extrapolation*
+   the bench does not measure.
+2. **CPU thread count is neither pinned nor reported.** `cpu_threads` defaults to
+   0 -> CT2 `intra_threads=0`. On the frozen pin **CT2 4.8.0 this is the
+   #2063-buggy path** (oversubscribe / pathological slowdown on some platforms;
+   elsewhere it silently uses `OMP_NUM_THREADS` or a small cap). So the published
+   CPU seconds depend on an environment variable the bench never sets or records,
+   and could be a worst-case oversubscribed number on a different machine — which
+   would make "GPU 2.3x faster than CPU" an artifact of a mis-threaded CPU run,
+   not a hardware fact.
+
+**Fix.**
+- For an honest throughput claim, bench at least one **long / concatenated clip**
+  (e.g. 60-300s; concatenate the JFK clip xN or use a longer public speech
+  sample) and report RTF there; keep the 11s clip only as a "short-clip latency"
+  data point and label it as such. State explicitly that the GPU-wins-on-long-
+  audio claim is supported (or not) by the long-clip RTF, not the 11s one.
+- Pin and report CPU threads: set `cpu_threads=os.cpu_count()` (or a fixed value)
+  explicitly in `WhisperModel(...)` for cpu cases, OR `export OMP_NUM_THREADS=N`,
+  and print the effective thread count + `OMP_NUM_THREADS` in the bench header
+  and the README caveat. Given #2063, do NOT leave `intra_threads=0` for a
+  published CT2-4.8.0 CPU number — set it explicitly.
+
+#### [MEDIUM-1] `runs` records the timed list but the median can be the warmup-excluded but still cold-ish first repeat; with REPEATS=3 the published median is noise-sensitive
+
+**Where:** `run_bench.py:50-52` (one warmup, then `REPEATS=3` timed).
+
+**Problem.** One warmup is good, but a single warmup on a 4GB Maxwell may not
+fully settle cuDNN autotune / clocks; and `statistics.median` of 3 is the middle
+value — one slow GC/throttle blip makes the published median that blip. The math
+is *correct*; the sample size is just thin for publication.
+
+**Fix.** Default `CT2_BENCH_REPEATS` to >= 5 (ideally 10) for the published run;
+report `min`/`median`/`max` (or all `runs[]`, which it already stores — just
+surface them in the README table). Keep `transcribe_s` = median but show spread.
+
+#### [MEDIUM-2] No thermal/throttle or clock guard, and no cold-vs-warm filesystem-cache control for the model load
+
+**Where:** `run_bench.py` overall; `load_s` semantics.
+
+**Problem.** On a small passively/throttle-prone workstation GPU, back-to-back
+configs can warm the card so later configs (or later models) run at different
+clocks; and the FIRST `WhisperModel(...)` of a model size pays cold-page model
+read from disk while the second pays warm page cache — so comparing `load_s`
+across the run is apples-to-oranges. Not a correctness bug, but it biases the
+*one-time cost* story the README wants to tell.
+
+**Fix.** (a) Note in the README that `load_s` is cold-cache-sensitive and was
+measured warm/cold (state which); (b) optionally log GPU temp/clocks
+(`nvidia-smi --query-gpu=temperature.gpu,clocks.sm`) before each case; (c) run
+GPU and CPU cases in separate process invocations if you want clean,
+non-cross-contaminated context state. At minimum, disclose the order-dependence.
+
+#### [MEDIUM-3] The bench summary's GPU-vs-CPU verdict compares GPU float32 only against CPU **int8**, silently dropping CPU float32 — and the README conclusion says "vs CPU" (1.36 = cpu float32) while the bench computes vs cpu int8 (1.57)
+
+**Where:** `run_bench.py:95-100` (`cpu = row.get("cpu/int8")`); vs the intended
+README "0.59 vs 1.36" (1.36 is cpu **float32**, not int8).
+
+**Problem.** Inconsistent baseline. The bench's printed verdict divides by
+`cpu/int8` (1.57s in Phase-4 -> ~2.66x), but the author's prose uses `cpu/float32`
+(1.36s -> ~2.31x). A reader cross-checking the JSON against the prose will find
+the "2.3x" doesn't match the script's own "vs CPU-int8" line. Pick ONE baseline
+and be explicit, or report both. (CPU int8 is the *faster* CPU path to beat for a
+fair "is the GPU worth it" framing; CPU float32 is the apples-to-apples compute
+type. Both are defensible; mixing them silently is not.)
+
+**Fix.** In the README state the baseline compute type every time
+("GPU float32 vs CPU int8: …x; vs CPU float32: …x"), and make the bench print
+both ratios. Do not write "vs CPU" unqualified.
+
+#### [MEDIUM-4] `x_realtime`/`rtf` use `info.duration` (post-VAD *content* duration), which can be shorter than the wall audio — fine, but it must be disclosed so RTF isn't mistaken for wall-clock-over-file-length
+
+**Where:** `run_bench.py:48,57-59`; `info.duration`.
+
+**Problem.** faster-whisper's `TranscriptionInfo.duration` is the processed audio
+duration; with VAD it can differ from the file's wall length. RTF computed
+against it is a legitimate metric but is "compute-time per second of *processed*
+audio," not "per second of *file*." For an 11s clip with speech throughout these
+nearly coincide, but the README should say which, or a careful reader will
+recompute RTF from the 11s file length and get a different number.
+
+**Fix.** Either disable VAD for the bench (faster-whisper default has VAD off
+unless `vad_filter=True`, so likely already fine — verify and state "VAD off,
+duration == file length") or print both `audio_s` and the raw file seconds and
+define RTF against the file length in the README.
+
+#### [MEDIUM-5] `bench_one` swallows ALL exceptions into `ok=False` with a 180-char string — a partial/garbage transcription or an OOM mid-stream can be recorded as a clean FAIL or, worse, a short truthy `warm_text` can mark `ok=True` on a truncated result
+
+**Where:** `run_bench.py:54,62-63`; `ok=bool(warm_text)`.
+
+**Problem.** `ok` is set from the *warmup* text being non-empty. If the warmup
+produces one stray token (e.g. partial decode before an OOM on the 4GB card on a
+larger model), `ok=True` is recorded and the timed runs may then differ or fail
+silently inside the median. Also `small` is in the default `MODELS` and may OOM
+or behave differently on 4GB under float32 GPU — a degraded result could be
+published as a valid row. The broad `except` hides the kind (OOM vs no_sm50 vs
+network), unlike `03` which classifies.
+
+**Fix.** (a) Assert the transcript is non-trivial (e.g. len > some chars, or
+compare against the known JFK text for the canonical clip) before `ok=True`;
+(b) classify the exception kind like `03` does (OOM / no_sm50 / network / other)
+so a published "FAIL" row is attributable; (c) consider dropping `small` from the
+*default published* set unless you confirm it fits float32 in 4GB, or label per-
+model VRAM headroom.
+
+#### [LOW-1] `02` cwd-shadow fix via `(cd /tmp && python -c ...)` is CORRECT and sufficient
+
+**Where:** `02_build_ct2.sh:112,116`.
+
+**Assessment (not a defect).** Both verify lines run from `/tmp`, so `sys.path[0]`
+is `/tmp`, not `${SRC}/python` (which contains a `ctranslate2/` source dir that
+would shadow the installed wheel and lack the compiled `_ext`). `/tmp` has no
+`ctranslate2` dir, so `import ctranslate2` resolves to the force-reinstalled
+site-packages wheel — which is exactly what we want to assert. The subshell also
+avoids leaking the `cd` into the rest of the script. **Correct and sufficient.**
+One nit: it assumes the venv `python` is on PATH inside the subshell; since
+`source venv/bin/activate` ran earlier in the same shell and `(...)` inherits the
+environment (PATH included), this holds. No fix required.
+
+#### [LOW-2] `CT2_PROJ` default in the bench (`~/projects/ct2-maxwell-final`) differs from where the repo appears to live; a published run must pin it
+
+**Where:** `run_bench.py:29`; `03_validate.py:25`.
+
+**Problem.** Default `PROJ` is `~/projects/ct2-maxwell-final`. If the author runs
+from elsewhere without `CT2_PROJ` set, `sample.wav`/`benchmark_results.json` land
+in a different tree than expected and the published JSON path is ambiguous.
+
+**Fix.** State the exact `CT2_PROJ`/cwd used for the published run in the README,
+and have the bench print `PROJ` in its header.
+
+#### [LOW-3] `audio_s` rounded to 2 decimals then used as RTF denominator — negligible, but `max(audio_s, 1e-6)` guard means a failed-duration case yields RTF ~1e6 silently
+
+**Where:** `run_bench.py:48,58`.
+
+**Problem.** If `info.duration` is missing (`getattr(... , 0.0)`), RTF becomes
+`med / 1e-6` = a huge number rather than an obvious error. The `ok` gate mostly
+prevents this from being printed, but a successful transcribe with a 0 duration
+(shouldn't happen, but) would publish a nonsense RTF.
+
+**Fix.** If `audio_s <= 0`, mark the row `ok=False`/`rtf=None` rather than
+emitting a 1e6 RTF.
+
+#### [LOW-4] K2200-4GB -> 940MX-2GB extrapolation honesty
+
+**Where:** README "Who is affected" / VRAM caveat; BUILD_SPEC deploy target.
+
+**Problem.** The bench/validation run on a Quadro K2200 (4GB). The README already
+warns 940MX has only 2GB and "do not assume a model that runs on the K2200 also
+runs on a 2GB card" — good. But the *performance* numbers are K2200-only; the
+940MX is a different SKU (different SM count, memory bandwidth, boost clocks) and
+will not match the K2200 RTF.
+
+**Fix.** Add one line: "All benchmark numbers are from the Quadro K2200 (4GB);
+the 940MX (2GB) is the same sm_50 ISA but a different, slower part — expect
+different RTF and tighter VRAM. Numbers are not transferable between cards; run
+`bench/run_bench.py` on your own card."
+
+---
+
+### Recommended exact wording for the README benchmark caveat
+
+> **Benchmark caveat (read before trusting these numbers).** All numbers are from
+> a single Quadro K2200 (Maxwell sm_50, 4 GB, driver 580.159.03) on Ubuntu 24.04,
+> CTranslate2 v4.8.0 + PR #1766, faster-whisper, beam_size=1, VAD off. Each figure
+> is the **median of N=… timed runs after one warmup**; the one-time
+> `WhisperModel(...)` load (CUDA context + weights to VRAM + first cuDNN/cuBLAS
+> setup) is reported **separately** as `load_s` and is *not* a per-clip cost.
+> CPU runs used `cpu_threads=…` (`OMP_NUM_THREADS=…`) — CTranslate2 4.8.0's
+> default `intra_threads=0` can mis-thread (issue #2063), so we pin it. On sm_50
+> there is no native FP16 and no `dp4a` int8, so CUDA int8/float16 fall back to
+> float32 and are not benchmarked. The short-clip (11 s) figures measure
+> **latency** (fixed per-call overhead dominates); the long-clip (… s) figures
+> measure **throughput** — only the latter supports any "GPU wins on long/batch
+> audio" statement. The 940MX (2 GB) is the same ISA but a different, slower part:
+> these numbers do not transfer. Reproduce on your own card with
+> `bench/run_bench.py` before deciding the GPU is worth it.
+
+And the conclusion line should read (only after the bench is actually run):
+
+> On the K2200, in steady state GPU float32 transcribes a short clip about
+> **<median-ratio>x faster than CPU <int8|float32>** (median of N runs:
+> <gpu_med>s vs <cpu_med>s), but it pays a one-time ~<load_med>s model-load/
+> GPU-warmup cost per process. For a single short clip that one-time cost can make
+> CPU win end-to-end; whether the GPU wins on sustained/long audio is answered by
+> the long-clip RTF row, not the 11 s clip.
+
+It should **NOT** claim: a bare "2.3x faster than CPU" (ambiguous baseline,
+n=1); "~4s CUDA init" (mislabeled cause, unisolated); or any throughput / "wins on
+long audio" statement backed only by the 11 s clip.
+
+---
+
+### Re-review #3 sources
+
+- faster-whisper `transcribe.py` (master): `transcribe()` returns
+  `Tuple[Iterable[Segment], TranscriptionInfo]`, segments lazy, info eager;
+  `WhisperModel.__init__` defaults `cpu_threads=0`, `num_workers=1`,
+  `device="auto"`, `compute_type="default"`; `cpu_threads -> intra_threads`.
+- CTranslate2 docs `parallel.html` / `performance.md`: `intra_threads`/
+  `inter_threads` semantics; `0` -> default (honors `OMP_NUM_THREADS`, small cap),
+  not all cores; total threads should not exceed physical cores.
+- OpenNMT/CTranslate2 issue #2063: `intra_threads=0` on 4.8.0 oversubscribes
+  (~1470% CPU) / pathologically slow vs `intra_threads=1` on some platforms —
+  the frozen pin's CPU-baseline risk.
+
+### Re-review #3 verdict
+
+**RE-REVIEW #3 STATUS (original): FAIL** (3 HIGH). The build, the cwd-shadow verify lines,
+and the *mechanics* of `run_bench.py` (lazy-generator forcing, median math,
+load/steady-state separation) are sound. The FAIL is about **what gets
+published**: the intended "2.3x / 4s CUDA init / GPU wins on long audio" sentence
+is built on a single un-warmed validation run, a mislabeled load cause, and an
+11 s clip that cannot support a throughput claim, with an unpinned CT2-4.8.0 CPU
+thread count underneath. Run `run_bench.py` (REPEATS>=5, pinned CPU threads, plus
+a long clip), publish only its medians with the baseline named and the caveat
+above, drop the "4s CUDA init" mechanism claim, and this becomes publishable.
+
+---
+
+## Re-review #3 FINAL (numbers verified)
+
+The author re-ran a rigorous benchmark (median of 5 timed runs after one warmup,
+K2200 sm_50 4 GB, Ubuntu 24.04, CT2 v4.8.0 + PR #1766, faster-whisper, beam=1,
+VAD off, `cpu_threads=4`) and rewrote the README "Is the GPU worth it on Maxwell?
+(measured)" section. I transcription-checked every published number against the
+measured dataset and re-derived every arithmetic value. All checks OK.
+
+### Number transcription (throughput table, 66 s clip) — OK
+
+Re-derived `round(med,2)`, `round(rtf,3)`, `round(x_rt,1)` for all 6 rows; all
+loads cross-checked too. Zero typos.
+
+- tiny  cuda f32: load 0.86 / 7.40 / 0.112 / 8.9x — OK
+- tiny  cpu  int8: load 0.53 / 32.92 / 0.499 / 2.0x — OK
+- tiny  cpu  f32: load 0.44 / 29.35 / 0.445 / 2.2x — OK
+- small cuda f32: load 9.88 / 27.36 / 0.415 / 2.4x — OK
+- small cpu  int8: load 0.89 / 140.51 / 2.129 / 0.5x — OK
+- small cpu  f32: load 1.15 / 113.74 / 1.723 / 0.6x — OK
+
+### Number transcription (latency table, 11 s clip) — OK
+
+Displayed transcribe medians `round(med,2)`: 0.19 (0.186), 0.82 (0.819),
+1.20 (1.198), 5.33 (5.331) — all OK. Loads match.
+
+### End-to-end (load + 1 clip) column recompute — OK
+
+- tiny  cuda f32: 0.86 + 0.186 = 1.046 -> ~1.0s — OK
+- tiny  cpu  f32: 0.44 + 0.819 = 1.259 -> ~1.3s — OK
+- small cuda f32: 9.88 + 1.198 = 11.078 -> ~11.1s — OK
+- small cpu  int8: 0.89 + 5.331 = 6.221 -> ~6.2s — OK
+
+### Headline ratios — OK
+
+32.922 / 7.401 = 4.45x (tiny), 140.508 / 27.363 = 5.13x (small). README states
+"tiny 4.45x, small 5.13x," correctly labeled "GPU vs CPU-int8 on the 66 s clip."
+Both exact.
+
+### Claim audit — all literally supported, none overstated
+
+- **"4–5x faster than the CPU baseline on a 66 s clip" / "GPU wins decisively
+  (4–5x)"** — OK. Anchored explicitly to the CPU-int8 baseline (4.45x / 5.13x,
+  which bracket 4–5x). vs CPU-float32 the ratios are 3.97x / 4.16x, but the
+  README names the int8 baseline every time, so the 4–5x figure is the
+  conservative-direction claim. Not overstated. Confined to the 66 s row, which
+  is the only one that supports a throughput claim.
+- **"CPU only wins for a single one-off short clip with a larger model"** — OK,
+  and the "larger model" qualifier is CORRECT and load-bearing. Verified against
+  the trap the prompt flagged: tiny short end-to-end is GPU 1.05s vs CPU 1.26s,
+  so **GPU wins tiny short too**. CPU only wins end-to-end for `small` (GPU
+  11.08s vs CPU 6.22s). Without "larger model" the claim would be false for tiny;
+  with it, it is exactly right.
+- **"int8 was slower than float32 on this CPU"** — OK. int8 > float32 transcribe
+  time in all four CPU pairs (32.92>29.35, 140.51>113.74, 0.868>0.819,
+  5.331>4.880). README correctly hedges "measure it."
+- **"small CPU cannot keep up with real time (RTF > 1) while the GPU stays at
+  ~0.4 RTF"** — OK. small cpu int8 RTF 2.129>1, small cpu f32 RTF 1.723>1, small
+  cuda RTF 0.415 ≈ 0.4.
+- **"~10 s one-time load" (small GPU) / "amortizes immediately over any repeated
+  use"** — OK. Measured small cuda load 9.88s ≈ 10s. Per-clip, small GPU
+  (1.198s) beats CPU-int8 (5.331s), so only the one-time load makes CPU win
+  end-to-end; the amortization claim is correct.
+- **sm_50 lede: "no native FP16, no `dp4a` int8, float32 the only supported CUDA
+  compute type, int8/float16 fall back to float32"** — OK. Matches
+  `get_supported_compute_types('cuda') == {'float32'}`. The bench only runs
+  `(cuda, float32)` for GPU, consistent with the fall-back statement; no
+  benchmarked cuda-int8 number is claimed.
+
+### Methodology provenance (run_bench.py) matches the README header — OK
+
+median-of-5 after one warmup (lines 89, 94-95); `cpu_threads=4` passed for CPU
+cases (line 74) + `OMP_NUM_THREADS` pinned pre-import (line 40); `beam_size=1,
+vad_filter=False` (line 85); RTF = med/dur, x_rt = dur/med (lines 100-101); long
+clip = short concatenated to ~66 s (LONG_REPEAT=6, lines 45/51-61); ratio printed
+as cpu_int8/gpu on the long clip (line 148). All consistent with the published
+numbers and prose.
+
+### Caveat paragraph — sufficient and accurate (OK)
+
+Covers: single-machine/single-K2200 scope; "940MX is the same sm_50 ISA but a
+different, slower, 2 GB part — these numbers do not transfer"; "short-clip rows
+measure latency; only the 66 s rows support a throughput claim" (matches the
+bench's latency-vs-throughput design); and "CPU threads were pinned (CT2 4.8.0
+default `intra_threads=0` can oversubscribe, issue #2063)." This closes the three
+original HIGHs (single-run -> median-of-5; "4s CUDA init" mechanism claim dropped
+in favor of measured `load`/"CUDA context + weights to VRAM + first cuDNN/cuBLAS
+setup"; throughput now backed by the 66 s clip, not the 11 s clip) and the
+relevant MEDIUMs (baseline named every time; threads pinned/reported; VAD off so
+RTF is per file second; K2200->940MX extrapolation disclaimed).
+
+### Residual overclaim scan — none found
+
+No remaining unsupported statement in the README. "frozen by design," the pins
+table, "DO NOT TOUCH" driver guidance, and the credit/PR-#1766 attribution are
+descriptive and consistent with the prior verified review. The benchmark section
+no longer contains the un-rigorous "2.3x / 4s CUDA init" claims that failed #3.
+
+### FINAL verdict
+
+**RE-REVIEW #3 FINAL: PASS.** Every published number is exactly backed by the
+measured median-of-5 data with no transcription error, every arithmetic value
+(end-to-end column, RTF, x_rt, headline ratios) re-derives correctly, and every
+claim is literally supported and conservatively stated (the load-bearing "larger
+model" qualifier is correct). The README is safe to publish as-is.

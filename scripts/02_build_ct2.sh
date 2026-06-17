@@ -107,9 +107,11 @@ pip install --force-reinstall "${WHEEL}"
 log "Installing faster-whisper (then restoring our sm_50 wheel)"
 pip install faster-whisper
 pip install --force-reinstall --no-deps "${WHEEL}"
-python -c "import ctranslate2 as c; assert c.get_cuda_device_count() >= 1; print('ct2 from', c.__file__)"
+# Verify from a NEUTRAL dir: cwd is ${SRC}/python which contains a 'ctranslate2'
+# source folder that would shadow the installed wheel and lack the C++ symbols.
+(cd /tmp && python -c "import ctranslate2 as c; assert c.get_cuda_device_count() >= 1; print('ct2 ok from', c.__file__)")
 
 log "=== BUILD DONE ==="
 echo "  wheel: ${PROJ}/dist/$(basename "${WHEEL}")"
-python -c "import ctranslate2 as c; print('ctranslate2', c.__version__, '| cuda devices:', c.get_cuda_device_count())"
+(cd /tmp && python -c "import ctranslate2 as c; print('ctranslate2', c.__version__, '| cuda devices:', c.get_cuda_device_count(), '| cuda types:', c.get_supported_compute_types('cuda'))")
 log "Next: scripts/03_validate.py (inside ${VENV})"

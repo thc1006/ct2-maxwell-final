@@ -3,16 +3,22 @@ CTranslate2/
 venv/
 dist/
 *.whl
-sample.wav
-validation_results.json
-cuda-env.sh
 __pycache__/
 *.pyc
-*.log
 
-install.log
-build.log
+# downloaded / generated audio
+sample.wav
+sample_long.wav
+
+# logs + phase markers
+*.log
 install.done
 install.failed
 build.done
 build.failed
+bench.done
+bench.failed
+cuda-env.sh
+
+# NOTE: benchmark_results.json and validation_results.json ARE committed as
+# evidence backing the README numbers.

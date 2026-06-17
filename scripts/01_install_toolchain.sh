@@ -25,8 +25,10 @@ log "Driver before: ${DRV_BEFORE} | GPU compute capability: ${CC}"
 avail_gb() { df -BM --output=avail "$1" 2>/dev/null | tail -1 | tr -dc '0-9' | awk '{printf "%d", $1/1024}'; }
 ROOT_GB="$(avail_gb /usr/local)"; HOME_GB="$(avail_gb "${HOME}")"
 log "Free disk: /usr/local=${ROOT_GB} GB | \$HOME=${HOME_GB} GB"
-# toolkit (~7GB) + cuDNN (~3GB) + CUDA build tree (4-8GB) needs real headroom.
-[[ "${ROOT_GB}" -ge 25 ]] || die "need >= 25 GB free where /usr/local lives, have ${ROOT_GB} GB"
+# Fresh install needs toolkit(~7GB)+cuDNN(~3GB)+build(4-8GB) of headroom.
+# On a re-run the toolkit is already present, so only cuDNN+build remain.
+NEED_GB=25; [[ -d /usr/local/cuda-12.9/bin ]] && NEED_GB=10
+[[ "${ROOT_GB}" -ge "${NEED_GB}" ]] || die "need >= ${NEED_GB} GB free where /usr/local lives, have ${ROOT_GB} GB"
 
 # --- 1. Protect the working driver -----------------------------------------
 # Hold any installed NVIDIA driver packages so apt cannot replace/remove them.
@@ -74,11 +76,16 @@ sudo apt-get clean
 madison_910() { apt-cache madison "$1" 2>/dev/null | awk '{print $3}' | grep -E '^9\.10\.' | sort -V | tail -1; }
 CUDNN_VER="$(madison_910 libcudnn9-cuda-12 || true)"
 CUDNN_DEV_VER="$(madison_910 libcudnn9-dev-cuda-12 || true)"
-[[ -n "${CUDNN_VER}" && -n "${CUDNN_DEV_VER}" ]] || die "no cuDNN 9.10.x in apt (only 9.11+? that drops Maxwell). Use the cuDNN 8 + ctranslate2==4.4.0 fallback."
-log "Installing cuDNN pinned: rt=${CUDNN_VER} dev=${CUDNN_DEV_VER}"
+CUDNN_HDR_VER="$(madison_910 libcudnn9-headers-cuda-12 || true)"
+[[ -n "${CUDNN_VER}" && -n "${CUDNN_DEV_VER}" && -n "${CUDNN_HDR_VER}" ]] || die "no cuDNN 9.10.x in apt (only 9.11+? that drops Maxwell). Use the cuDNN 8 + ctranslate2==4.4.0 fallback."
+log "Installing cuDNN pinned: rt=${CUDNN_VER} hdr=${CUDNN_HDR_VER} dev=${CUDNN_DEV_VER}"
+# libcudnn9-dev hard-depends on the exact-version headers pkg; apt will NOT
+# auto-add it under exact-version pinning, so list all three explicitly.
 sudo apt-get install -y --no-install-recommends --allow-downgrades \
-  "libcudnn9-cuda-12=${CUDNN_VER}" "libcudnn9-dev-cuda-12=${CUDNN_DEV_VER}"
-sudo apt-mark hold libcudnn9-cuda-12 libcudnn9-dev-cuda-12 || die "failed to hold cuDNN packages"
+  "libcudnn9-cuda-12=${CUDNN_VER}" \
+  "libcudnn9-headers-cuda-12=${CUDNN_HDR_VER}" \
+  "libcudnn9-dev-cuda-12=${CUDNN_DEV_VER}"
+sudo apt-mark hold libcudnn9-cuda-12 libcudnn9-headers-cuda-12 libcudnn9-dev-cuda-12 || die "failed to hold cuDNN packages"
 
 # --- 6. Persist CUDA env (does not affect anything until sourced) -----------
 ENVFILE="${HOME}/projects/ct2-maxwell-final/cuda-env.sh"
