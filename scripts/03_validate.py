@@ -4,10 +4,10 @@
 GPU vs CPU across compute types.
 
 Run inside the project venv AFTER 02_build_ct2.sh and after faster-whisper is
-installed with our patched ctranslate2 kept (see scripts/02c note / README):
+installed with our patched ctranslate2 kept (see 02_build_ct2.sh step 6 / README):
 
-    source ~/projects/ct2-maxwell-final/venv/bin/activate
-    source ~/projects/ct2-maxwell-final/cuda-env.sh
+    source venv/bin/activate
+    source cuda-env.sh
     python scripts/03_validate.py
 
 A real cudaErrorNoKernelImageForDevice on the GPU path means the loaded

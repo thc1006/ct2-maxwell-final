@@ -1,3 +1,13 @@
+# sm_50 (Maxwell) support for CTranslate2 under CUDA 12.
+#
+# Author:  Giulio Paci (@giuliopaci)
+# Source:  OpenNMT/CTranslate2 PR #1766  https://github.com/OpenNMT/CTranslate2/pull/1766
+# Issue:   https://github.com/OpenNMT/CTranslate2/issues/1765
+# License: MIT (same as upstream CTranslate2)
+#
+# Redistributed verbatim from the above PR. All credit for the code goes to the
+# original author; this repository only packages and freezes it.
+#
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 52610ac89..76d84fa0a 100644
 --- a/CMakeLists.txt
