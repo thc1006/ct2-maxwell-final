@@ -34,8 +34,8 @@ cuDNN 8 + CTranslate2 == 4.4.0 (cuDNN 8 fully supported sm_50).
 
 ## Build host (validation target)
 
-- Host alias: `1030-dev` (hostname `thc1006-D630MT`), Ubuntu 24.04.4 LTS, x86_64
-- GPU: Quadro K2200, compute cap 5.0, 4 GB, driver 580.159.03
+- A Linux build/validation host with an sm_50 GPU: Ubuntu 24.04 LTS, x86_64
+- GPU: Quadro K2200, compute cap 5.0, 4 GB, driver 580.159.03 (R580, last Maxwell branch)
 - 4 cores, 23 GB RAM, ~31 GB free disk (TIGHT — keep the build lean)
 - Deploy target downstream: GeForce 940MX (same sm_50, only 2 GB VRAM)
 

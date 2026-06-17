@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 
 MODEL = os.environ.get("CT2_VAL_MODEL", "tiny")  # fits 4GB K2200 and 2GB 940MX
-PROJ = Path(os.environ.get("CT2_PROJ", Path.home() / "projects" / "ct2-maxwell-final"))
+PROJ = Path(os.environ.get("CT2_PROJ", Path(__file__).resolve().parent.parent))
 SAMPLE = PROJ / "sample.wav"
 SAMPLE_URLS = [
     "https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav",

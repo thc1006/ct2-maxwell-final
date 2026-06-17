@@ -7,7 +7,8 @@ set -euo pipefail
 log() { printf '\n\033[1;36m[build] %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31m[build][FATAL] %s\033[0m\n' "$*" >&2; exit 1; }
 
-PROJ="${HOME}/projects/ct2-maxwell-final"
+# Resolve the project root from THIS script's location (works from any clone dir).
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${PROJ}/CTranslate2"
 PATCH="${PROJ}/patches/1766-sm50.patch"
 VENV="${PROJ}/venv"

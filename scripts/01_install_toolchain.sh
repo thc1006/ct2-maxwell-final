@@ -9,6 +9,10 @@ set -euo pipefail
 log() { printf '\n\033[1;36m[install] %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31m[install][FATAL] %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Resolve the project root from THIS script's location, so the repo works no
+# matter where it was cloned (do not hardcode ~/projects/...).
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # --- 0. Preconditions -------------------------------------------------------
 [[ "$(uname -m)" == "x86_64" ]] || die "expected x86_64"
 . /etc/os-release
@@ -88,7 +92,7 @@ sudo apt-get install -y --no-install-recommends --allow-downgrades \
 sudo apt-mark hold libcudnn9-cuda-12 libcudnn9-headers-cuda-12 libcudnn9-dev-cuda-12 || die "failed to hold cuDNN packages"
 
 # --- 6. Persist CUDA env (does not affect anything until sourced) -----------
-ENVFILE="${HOME}/projects/ct2-maxwell-final/cuda-env.sh"
+ENVFILE="${PROJ}/cuda-env.sh"
 mkdir -p "$(dirname "${ENVFILE}")"
 cat > "${ENVFILE}" <<'ENV'
 # source this before building / running

@@ -161,16 +161,17 @@ in `scripts/03_validate.py`) before deciding the GPU is worth it for your worklo
 
 ## Prebuilt wheels
 
-Prebuilt `ctranslate2` wheels are attached to the project's **GitHub Releases**, produced by
-the CI workflow. They:
+There is **no prebuilt wheel yet** — build from source with the scripts above. When a tagged
+release (`v*`) is pushed, the CI workflow ([`.github/workflows/build-wheels.yml`](.github/workflows/build-wheels.yml))
+cross-compiles an sm_50 wheel and attaches it to the matching **GitHub Release**. Any such wheel:
 
-- contain **only sm_50 SASS** (no other architectures), and
-- target **CUDA 12.9 + cuDNN 9.10** on **Linux x86_64**.
+- contains **only sm_50 SASS** (no other architectures), and
+- targets **CUDA 12.9 + cuDNN 9.10** on **Linux x86_64**.
 
-They will not run anywhere else. On a non-Maxwell card, on a different CUDA/cuDNN, or on a
-different platform, build from source instead. If you are on a Maxwell sm_50 host with the
-frozen toolchain installed (step 1 above), you can `pip install` the release wheel directly
-rather than running the full build.
+It will not run anywhere else. On a non-Maxwell card, a different CUDA/cuDNN, or a different
+platform, build from source instead. Once a release wheel exists, on a Maxwell sm_50 host with
+the frozen toolchain installed (step 1 above) you can `pip install` it rather than running the
+full build.
 
 ## Credit
 

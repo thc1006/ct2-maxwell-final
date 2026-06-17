@@ -39,7 +39,7 @@ CPU_THREADS = int(os.environ.get("CT2_CPU_THREADS", os.cpu_count() or 4))
 # Pin CPU math threads BEFORE importing faster_whisper / ctranslate2.
 os.environ.setdefault("OMP_NUM_THREADS", str(CPU_THREADS))
 
-PROJ = Path(os.environ.get("CT2_PROJ", Path.home() / "projects" / "ct2-maxwell-final"))
+PROJ = Path(os.environ.get("CT2_PROJ", Path(__file__).resolve().parent.parent))
 SHORT = PROJ / "sample.wav"
 LONG = PROJ / "sample_long.wav"
 LONG_REPEAT = max(2, int(os.environ.get("CT2_LONG_REPEAT", "6")))
